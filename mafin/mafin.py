@@ -189,6 +189,10 @@ def compute_vectors_and_conservation(block,
 
     ref_chromosome = '.'.join(ref_seq_record.id.split('.')[1:])  # Skip the genome ID
 
+    # Track best alignment per genome_id (highest conservation) to handle
+    # duplicate alignments for the same genome within a block.
+    best_per_genome = {}
+
     for seq_record in block:
         genome_id = seq_record.id.split('.')[0]
         if genome_id == ref_genome_id:
@@ -218,7 +222,7 @@ def compute_vectors_and_conservation(block,
             # 2a) If ref base is '-' and the other is not, add '-' to denote gap in motif
             elif rbase == '-' and obase != '-':
                 vector_list.append('-')
-            
+
             # 2b) If ref base is not '-' and the other is '-', add 0 to denote mismatch
             elif rbase != '-' and obase == '-':
                 vector_list.append('0')
@@ -241,9 +245,6 @@ def compute_vectors_and_conservation(block,
         # # of matches is 'matches', denominator is vector_length
         conservation_pct = (matches / vector_length) * 100.0
 
-        total_conservation += conservation_pct
-        genomes_with_data += 1
-
         seq_strand = seq_record.annotations.get('strand', '+')
         seq_start = int(seq_record.annotations.get('start', 0))
         seq_size = int(seq_record.annotations.get('size', 0))
@@ -255,7 +256,6 @@ def compute_vectors_and_conservation(block,
         elif seq_strand == 1:
             seq_strand = '+'
 
-        # Also compute the "genomic" start/end for this sequence
         seq_gapped_full = str(seq_record.seq)
         ungapped_positions_before_motif_seq = len([c for c in seq_gapped_full[:gapped_start] if c != '-'])
         motif_ungapped_length_seq = len(seq_gapped_fragment.replace('-', ''))
@@ -263,7 +263,7 @@ def compute_vectors_and_conservation(block,
         seq_genomic_start = seq_start + ungapped_positions_before_motif_seq
         seq_genomic_end = seq_genomic_start + motif_ungapped_length_seq - 1
 
-        aligned_sequences.append({
+        entry = {
             "genome_id": genome_id,
             "chromosome": seq_chromosome,
             "genomic_start": seq_genomic_start,
@@ -274,11 +274,18 @@ def compute_vectors_and_conservation(block,
             "conservation": f"{conservation_pct:.2f}%",
             "gapped_start": gapped_start,
             "gapped_end": gapped_end - 1,
-        })
+        }
+
+        if genome_id not in best_per_genome or conservation_pct > best_per_genome[genome_id][0]:
+            best_per_genome[genome_id] = (conservation_pct, entry, vector_str)
+
+    for genome_id, (conservation_pct, entry, vector_str) in best_per_genome.items():
+        total_conservation += conservation_pct
+        genomes_with_data += 1
+        aligned_sequences.append(entry)
         vectors[genome_id] = vector_str
 
     if genomes_with_data > 0:
-        # Average conservation across all compared genomes
         avg_conservation_value = total_conservation / genomes_with_data
     else:
         avg_conservation_value = 0.0
