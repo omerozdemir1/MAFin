@@ -23,7 +23,7 @@ st.set_page_config(page_title="MAFin", layout="wide")
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
-TEST_DIR = CURRENT_DIR / "mafin" / "test"
+TEST_DIR = CURRENT_DIR / "test"
 
 
 def count_lines_fast(filepath):
@@ -49,14 +49,47 @@ def render_input_stats(label, content):
         raw_bytes = text_value.encode("utf-8")
 
     lines = text_value.splitlines()
-    nonempty_lines = [line for line in lines if line.strip()]
+    nonempty_lines = [line.strip() for line in lines if line.strip()]
     first_line = nonempty_lines[0] if nonempty_lines else "n/a"
 
     stat_cols = st.columns(4)
-    stat_cols[0].metric(f"{label} Size", f"{len(raw_bytes):,} bytes", help="The total file or pattern size in bytes.")
-    stat_cols[1].metric("Lines", f"{len(lines):,}", help="The total number of lines in the input.")
-    stat_cols[2].metric("Non-empty", f"{len(nonempty_lines):,}", help="The number of lines containing actual text/data.")
-    stat_cols[3].metric("First Line", textwrap.shorten(first_line, width=28, placeholder="..."), help="A preview of the first valid line in the input.")
+
+    if "mer" in label.lower():
+        total_kmers = len(nonempty_lines)
+        k_len = len(nonempty_lines[0]) if nonempty_lines else 0
+        
+        # Alphabet check (DNA: A, C, G, T, N)
+        dna_chars = set("ACGTNacgtn")
+        all_dna = all(set(line).issubset(dna_chars) for line in nonempty_lines) if nonempty_lines else True
+        
+        stat_cols[0].metric("Total K-mers", f"{total_kmers:,}", help="The total number of unique sequences to search.")
+        stat_cols[1].metric("Length (K)", f"{k_len}", help="The number of nucleotides in each sequence.")
+        stat_cols[2].metric("Alphabet", "DNA (ACGTN)" if all_dna else "Mixed/Invalid", help="Checks if the input contains only standard DNA bases.")
+        stat_cols[3].metric("First Line", textwrap.shorten(first_line, width=28, placeholder="..."), help="A preview of the first valid line in the input.")
+
+    elif "Regex" in label:
+        import re
+        total_patterns = len(nonempty_lines)
+        
+        # Validate regexes
+        invalid_count = 0
+        for p in nonempty_lines:
+            try:
+                re.compile(p)
+            except:
+                invalid_count += 1
+        
+        stat_cols[0].metric("Total Patterns", f"{total_patterns:,}", help="The total number of flexible patterns to evaluate.")
+        stat_cols[1].metric("Input Size", f"{len(text_value):,} chars", help="Total number of characters in the regex input.")
+        stat_cols[2].metric("Validation", "All Valid" if invalid_count == 0 else f"{invalid_count} Invalid", help="Checks if all patterns are mathematically valid regular expressions.")
+        stat_cols[3].metric("First Line", textwrap.shorten(first_line, width=28, placeholder="..."), help="A preview of the first valid line in the input.")
+
+    else:
+        # Fallback for JASPAR or other files
+        stat_cols[0].metric(f"{label} Size", f"{len(raw_bytes):,} bytes", help="The total file or pattern size in bytes.")
+        stat_cols[1].metric("Lines", f"{len(lines):,}", help="The total number of lines in the input.")
+        stat_cols[2].metric("Non-empty", f"{len(nonempty_lines):,}", help="The number of lines containing actual text/data.")
+        stat_cols[3].metric("First Line", textwrap.shorten(first_line, width=28, placeholder="..."), help="A preview of the first valid line in the input.")
 
 
 def execute_mafin_analysis(tmpdir, maf_file_obj, maf_name, search_type_param, search_data, search_in, rev_comp, procs, pval, bg_freqs, detailed, genome_ids_data=None):
@@ -66,7 +99,7 @@ def execute_mafin_analysis(tmpdir, maf_file_obj, maf_name, search_type_param, se
     with open(maf_path, "wb") as file_handle:
         shutil.copyfileobj(maf_file_obj, file_handle)
 
-    cmd = [sys.executable, str(CURRENT_DIR / "mafin" / "mafin.py"), str(maf_path)]
+    cmd = [sys.executable, str(CURRENT_DIR / "mafin.py"), str(maf_path)]
 
     if search_type_param == "kmers":
         kmers_path = os.path.join(tmpdir, "kmers.txt")
@@ -356,7 +389,7 @@ def render_analysis_results(workspace_dir, elapsed_time=None, max_memory=None):
 
 
 with st.sidebar:
-    st.image("https://i.postimg.cc/V5QnxMWp/logo-no-background.png", use_container_width=True)
+    st.image("https://camo.githubusercontent.com/58572d328397031d6eef8d5622024a6865c050331519a919a154a4fec7c33894/68747470733a2f2f692e706f7374696d672e63632f5635516e784d57702f6c6f676f2d6e6f2d6261636b67726f756e642e706e67", use_container_width=True)
     st.divider()
     nav_selection = st.radio(
         "Navigation",
@@ -1440,7 +1473,7 @@ elif nav_selection == "🚀 Run Motif Search":
         )
     with col_u2:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        demo_maf = CURRENT_DIR / "mafin" / "test" / "test_alignment.maf"
+        demo_maf = CURRENT_DIR / "test" / "test_alignment.maf"
         if demo_maf.exists():
             with open(demo_maf, "rb") as f:
                 st.download_button(
@@ -1485,7 +1518,7 @@ elif nav_selection == "🚀 Run Motif Search":
             placeholder="AAAATTTTGGGGCCCC\nTTTTTTTTTTTTTTTT",
             height=100,
             key="kmers_input_area",
-            help="Type exact DNA sequences (e.g., 16-mers), one per line. No wildcards or special characters allowed."
+            help="Type exact DNA sequences (e.g., 16-mers), one per line. Note: 'N' is allowed but matches literally (it is not a wildcard). For wildcard searches, use the Regex option below."
         )
         search_type_param = "kmers"
         search_input = None
@@ -1493,12 +1526,22 @@ elif nav_selection == "🚀 Run Motif Search":
             lines = [line.strip() for line in kmers_input.strip().split("\n") if line.strip()]
             if lines:
                 k_length = len(lines[0])
-                invalid_lines = [line for line in lines if len(line) != k_length]
-                if invalid_lines:
-                    st.error(f"❌ **Invalid Input:** All K-mers must be exactly the same length. You started with a {k_length}-mer, but also entered a {len(invalid_lines[0])}-mer (`{invalid_lines[0]}`).")
+                
+                # Check for length consistency
+                invalid_len_lines = [line for line in lines if len(line) != k_length]
+                
+                # Check for invalid DNA characters
+                dna_chars = set("ACGTNacgtn")
+                invalid_chars = set()
+                for line in lines:
+                    invalid_chars.update(set(line) - dna_chars)
+                
+                if invalid_len_lines:
+                    st.error(f"❌ **Invalid Input:** All K-mers must be exactly the same length. You started with a {k_length}-mer, but also entered a {len(invalid_len_lines[0])}-mer (`{invalid_len_lines[0]}`).")
+                elif invalid_chars:
+                    st.error(f"❌ **Invalid DNA Sequence:** Sequences can only contain A, C, G, T, or N. Found invalid characters: `{', '.join(sorted(list(invalid_chars)))}`.")
                 else:
                     search_input = kmers_input.strip()
-                    render_input_stats(f"Exact {k_length}-mers", kmers_input)
         elif kmers_input:
             st.warning("⚠️ Please enter at least one valid sequence. (Only whitespace detected)")
 
@@ -1510,11 +1553,39 @@ elif nav_selection == "🚀 Run Motif Search":
             key="regex_input_area",
             help="Type patterns using standard regular expressions. For example, 'A[GT]C' means A followed by either G or T, followed by C."
         )
-        search_input = regex_input.strip() if regex_input.strip() else None
+        search_input = None
         search_type_param = "regexes"
+        
         if regex_input.strip():
-            render_input_stats("Regex patterns", regex_input)
-        elif regex_input:
+            # Find EVERY character that is not a DNA base or whitespace
+            import re as py_re
+            non_dna_found = py_re.findall(r'[^ACGTNacgtn\s]', regex_input)
+            
+            if non_dna_found:
+                unique_chars = sorted(list(set(non_dna_found)))
+                meta_chars = set("[]().*+?^$|{}\\")
+                
+                # Identify characters that are not DNA bases and not regex meta-characters
+                found_literal = [c for c in unique_chars if c not in meta_chars]
+                
+                if found_literal:
+                    st.error(f"❌ **Invalid Genomic Characters:** `{', '.join(found_literal)}` are not standard DNA bases (A, C, G, T, N). These characters will not match anything in genomic data.")
+            
+            # Syntax Check
+            syntax_error = False
+            for line in regex_input.strip().split("\n"):
+                if not line.strip(): continue
+                try:
+                    py_re.compile(line.strip())
+                except Exception as e:
+                    st.error(f"❌ **Regex Syntax Error:** `{line.strip()}` is invalid. Details: {e}")
+                    syntax_error = True
+                    break
+            
+            if not syntax_error:
+                search_input = regex_input.strip()
+        
+        if regex_input and not regex_input.strip():
             st.warning("⚠️ Please enter at least one valid regex pattern. (Only whitespace detected)")
 
     else:
@@ -1522,15 +1593,22 @@ elif nav_selection == "🚀 Run Motif Search":
             "Upload JASPAR Motif File (.jaspar)",
             type=["jaspar"],
             key="jaspar_file_upload",
-            help="A file containing a probability matrix of base frequencies, usually obtained from the JASPAR database for studying transcription factors."
+            help="A file containing a probability matrix of base frequencies, usually obtained from the JASPAR database for studying transcription factors. Must start with a `>` header."
         )
-        search_input = jaspar_file
         search_type_param = "jaspar_file"
         if jaspar_file:
-            preview = "\n".join(jaspar_file.getvalue().decode("utf-8").splitlines()[:3])
-            st.caption("File Preview:")
-            st.code(f"{preview}\n...", language="text")
-            render_input_stats("JASPAR file", jaspar_file)
+            try:
+                content = jaspar_file.getvalue().decode("utf-8")
+                if not content.strip().startswith(">"):
+                    st.error("❌ **Invalid JASPAR Content:** A valid JASPAR file must start with a `>` header line (e.g., `>MA0001.1 AGL3`).")
+                    search_input = None
+                else:
+                    preview = "\n".join(content.splitlines()[:3])
+                    st.code(f"{preview}\n...", language="text")
+                    search_input = jaspar_file
+            except Exception as e:
+                st.error(f"❌ **Error Reading JASPAR File:** {e}")
+                search_input = None
 
     st.markdown("---")
     st.subheader("⚙️ Step 3: Search Scope & Settings")
